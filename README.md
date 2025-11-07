@@ -9,25 +9,47 @@ A multi-tier application for uploading, processing, and storing images with meta
 - **Data Tier**: Postgres DB (image metadata); Disk Storage (uploaded/processed images).
 
 ```mermaid
-graph LR
-    subgraph "Client Tier"
-        Clients[Web Clients]
-        Frontend[Frontend App<br/>Handles Requests]
-    end
-    subgraph "Application Tier"
-        Backend[Backend Server<br/>Image Processing:<br/>- Resize<br/>- Thumbnail<br/>- Convert<br/>- Filter]
-    end
-    subgraph "Data Tier"
-        DB[Postgres DB<br/>Stores Image Metadata]
-        Disk[Disk Storage<br/>Stores Uploaded and<br/>Processed Images]
-    end
-    
-    Clients -->|HTTP Requests| Frontend
-    Frontend -->|Upload Images| Disk
-    Frontend -->|Upload Metadata| DB
-    Frontend -->|API Calls| Backend
-    Backend -->|Fetch Original Metadata| DB
-    Backend -->|Upload Processed Metadata| DB
-    Backend -->|Read/Write Images| Disk
-    Backend -->|Processed Data| Frontend
-    Frontend -->|Responses| Clients
+graph TD
+
+%% =====================
+%% STYLE DEFINITIONS
+%% =====================
+classDef client fill:#fff2cc,stroke:#333,stroke-width:1px,color:#000;
+classDef app fill:#c9daf8,stroke:#333,stroke-width:1px,color:#000;
+classDef data fill:#f4cccc,stroke:#333,stroke-width:1px,color:#000;
+
+%% =====================
+%% CLIENT TIER
+%% =====================
+subgraph Client_Tier["***Client Tier***"]
+    Clients[**Web Clients**]:::client
+    Frontend[**Frontend App**<br/>Handles Requests]:::app
+end
+
+%% =====================
+%% APPLICATION TIER
+%% =====================
+subgraph Application_Tier["***Application Tier***"]
+    Backend[**Backend Server**<br/>Image Processing:<br/>• Resize<br/>• Thumbnail<br/>• Convert<br/>• Filter]:::app
+end
+
+%% =====================
+%% DATA TIER
+%% =====================
+subgraph Data_Tier["***Data Tier***"]
+    DB[**Postgres DB**<br/>Stores Uploaded and Processed Images Metadata]:::data
+    Disk[**Disk Storage**<br/>Stores Uploaded and<br/>Processed Images]:::data
+end
+
+%% =====================
+%% CONNECTIONS
+%% =====================
+Clients -->|HTTP Requests| Frontend
+Frontend <-->|Upload / Download Images| Disk
+Frontend -->|Upload / Fetch Metadata| DB
+Frontend -->|API Calls| Backend
+Backend -->|Upload / Fetch Metadata| DB
+Backend <-->|Read / Write Images| Disk
+Backend -->|Processed Data| Frontend
+Frontend -->|Responses| Clients
+```
