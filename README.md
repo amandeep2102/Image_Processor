@@ -1,10 +1,10 @@
 # Image Processing Service
 
-A multi-tier application for uploading, processing, and storing images with metadata.
+A multi-tier application for processing images.
 
 ## Architecture
 
-- **Client Tier**: Web clients interact with Frontend App (handles requests, no UI).
+- **Client Tier**: Web clients interact with Frontend App (handles requests).
 - **Application Tier**: Backend Server processes images (resize, thumbnail, convert, filter).
 - **Data Tier**: Postgres DB (image metadata); Disk Storage (uploaded/processed images).
 
