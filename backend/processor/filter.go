@@ -3,11 +3,10 @@ package processor
 import (
 	"database/sql"
 	"fmt"
+	"github.com/disintegration/imaging"
 	"image"
 	"os"
 	"path/filepath"
-
-	"github.com/disintegration/imaging"
 )
 
 func ApplyFilter(db *sql.DB, imageID string, params map[string]interface{}) (string, error) {

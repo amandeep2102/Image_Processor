@@ -6,6 +6,7 @@ import (
 
 	"github.com/amandeep2102/image-processor/backend/worker"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
 
@@ -15,7 +16,6 @@ var (
 )
 
 func main() {
-	// Connect to database
 	var err error
 	db, err = sql.Open("postgres",
 		"host=localhost port=5432 user=imageuser password=imagepass dbname=imagedb sslmode=disable")
@@ -24,30 +24,34 @@ func main() {
 	}
 	defer db.Close()
 
-	// Initialize worker pool
-	workerPool = worker.NewPool(10, db) // 10 workers
+	// Initialize worker pool with 10 workers
+	workerPool = worker.NewPool(10, db)
 	workerPool.Start()
 	defer workerPool.Stop()
 
-	// Setup router
 	r := gin.Default()
 
-	// Health check
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
-	// Process endpoints
+	r.GET("/health", handleHealth)
 	r.POST("/process/resize", handleResize)
 	r.POST("/process/thumbnail", handleThumbnail)
 	r.POST("/process/filter", handleFilter)
 	r.POST("/process/convert", handleConvert)
-	r.POST("/process/batch", handleBatch)
+	r.GET("/job/:job_id", handleGetJobResult)
+	r.GET("/workers/stats", handleWorkerStats)
 
 	log.Println("Backend server starting on :8081")
 	r.Run(":8081")
 }
 
+func handleHealth(c *gin.Context) {
+	c.JSON(200, gin.H{
+		"status":         "ok",
+		"queue_size":     workerPool.GetQueueSize(),
+		"queue_capacity": workerPool.GetQueueCapacity(),
+	})
+}
+
+// Async processing (returns immediately with job ID)
 func handleResize(c *gin.Context) {
 	var req struct {
 		ImageID string `json:"image_id"`
@@ -60,8 +64,9 @@ func handleResize(c *gin.Context) {
 		return
 	}
 
-	// Submit job to worker pool
+	// Create job with unique ID
 	job := worker.Job{
+		JobID:     uuid.New().String(),
 		ImageID:   req.ImageID,
 		Operation: "resize",
 		Parameters: map[string]interface{}{
@@ -70,8 +75,21 @@ func handleResize(c *gin.Context) {
 		},
 	}
 
-	result := workerPool.Submit(job)
-	c.JSON(200, result)
+	// Submit to worker pool (non-blocking)
+	if err := workerPool.Submit(job); err != nil {
+		c.JSON(503, gin.H{
+			"error":   "Worker pool is busy",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Return immediately with job ID
+	c.JSON(202, gin.H{
+		"job_id":     job.JobID,
+		"message":    "Job submitted successfully",
+		"queue_size": workerPool.GetQueueSize(),
+	})
 }
 
 func handleThumbnail(c *gin.Context) {
@@ -86,6 +104,7 @@ func handleThumbnail(c *gin.Context) {
 	}
 
 	job := worker.Job{
+		JobID:     uuid.New().String(),
 		ImageID:   req.ImageID,
 		Operation: "thumbnail",
 		Parameters: map[string]interface{}{
@@ -93,14 +112,21 @@ func handleThumbnail(c *gin.Context) {
 		},
 	}
 
-	result := workerPool.Submit(job)
-	c.JSON(200, result)
+	if err := workerPool.Submit(job); err != nil {
+		c.JSON(503, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(202, gin.H{
+		"job_id":  job.JobID,
+		"message": "Job submitted successfully",
+	})
 }
 
 func handleFilter(c *gin.Context) {
 	var req struct {
 		ImageID    string  `json:"image_id"`
-		FilterType string  `json:"filter_type"` // blur, sharpen, grayscale
+		FilterType string  `json:"filter_type"`
 		Intensity  float64 `json:"intensity"`
 	}
 
@@ -110,6 +136,7 @@ func handleFilter(c *gin.Context) {
 	}
 
 	job := worker.Job{
+		JobID:     uuid.New().String(),
 		ImageID:   req.ImageID,
 		Operation: "filter",
 		Parameters: map[string]interface{}{
@@ -118,14 +145,21 @@ func handleFilter(c *gin.Context) {
 		},
 	}
 
-	result := workerPool.Submit(job)
-	c.JSON(200, result)
+	if err := workerPool.Submit(job); err != nil {
+		c.JSON(503, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(202, gin.H{
+		"job_id":  job.JobID,
+		"message": "Job submitted successfully",
+	})
 }
 
 func handleConvert(c *gin.Context) {
 	var req struct {
 		ImageID string `json:"image_id"`
-		Format  string `json:"format"` // jpeg, png, webp
+		Format  string `json:"format"`
 		Quality int    `json:"quality"`
 	}
 
@@ -135,6 +169,7 @@ func handleConvert(c *gin.Context) {
 	}
 
 	job := worker.Job{
+		JobID:     uuid.New().String(),
 		ImageID:   req.ImageID,
 		Operation: "convert",
 		Parameters: map[string]interface{}{
@@ -143,32 +178,39 @@ func handleConvert(c *gin.Context) {
 		},
 	}
 
-	result := workerPool.Submit(job)
-	c.JSON(200, result)
-}
-
-func handleBatch(c *gin.Context) {
-	var req struct {
-		ImageIDs   []string               `json:"image_ids"`
-		Operation  string                 `json:"operation"`
-		Parameters map[string]interface{} `json:"parameters"`
-	}
-
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+	if err := workerPool.Submit(job); err != nil {
+		c.JSON(503, gin.H{"error": err.Error()})
 		return
 	}
 
-	results := make([]interface{}, 0)
-	for _, imageID := range req.ImageIDs {
-		job := worker.Job{
-			ImageID:    imageID,
-			Operation:  req.Operation,
-			Parameters: req.Parameters,
-		}
-		result := workerPool.Submit(job)
-		results = append(results, result)
+	c.JSON(202, gin.H{
+		"job_id":  job.JobID,
+		"message": "Job submitted successfully",
+	})
+}
+
+// NEW: Get job result
+func handleGetJobResult(c *gin.Context) {
+	jobID := c.Param("job_id")
+
+	result, found := workerPool.GetResult(jobID)
+	if !found {
+		c.JSON(404, gin.H{
+			"job_id":  jobID,
+			"status":  "pending",
+			"message": "Job is still processing or not found",
+		})
+		return
 	}
 
-	c.JSON(200, gin.H{"results": results})
+	c.JSON(200, result)
+}
+
+// NEW: Worker statistics
+func handleWorkerStats(c *gin.Context) {
+	c.JSON(200, gin.H{
+		"queue_size":     workerPool.GetQueueSize(),
+		"queue_capacity": workerPool.GetQueueCapacity(),
+		"queue_usage":    float64(workerPool.GetQueueSize()) / float64(workerPool.GetQueueCapacity()) * 100,
+	})
 }

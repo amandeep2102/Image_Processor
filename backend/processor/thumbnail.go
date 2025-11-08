@@ -21,7 +21,17 @@ func Thumbnail(db *sql.DB, imageID string, params map[string]interface{}) (strin
 		return "", fmt.Errorf("failed to open image: %v", err)
 	}
 
-	size := int(params["size"].(float64))
+	// size := int(params["size"].(float64))
+
+	var size int
+	switch v := params["size"].(type) {
+	case float64:
+		size = int(v)
+	case int:
+		size = v
+	default:
+		return "", fmt.Errorf("invalid quality type: %T", v)
+	}
 
 	// Create thumbnail (CPU-intensive)
 	thumb := imaging.Thumbnail(img, size, size, imaging.Lanczos)

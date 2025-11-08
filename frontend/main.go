@@ -100,8 +100,8 @@ func handleUpload(c *gin.Context) {
 		return
 	}
 
-	// Get image dimensions (optional, CPU-bound)
-	// For simplicity, we'll skip this for now
+	// Get image dimensions
+	// For simplicity, skip this for now
 
 	// Save metadata to database (I/O-bound)
 	_, err = db.Exec(`
@@ -308,7 +308,7 @@ func handleStats(c *gin.Context) {
         GROUP BY operation_type
     `)
 	if err != nil {
-		c.JSON(500, gin.H{"error": "Failed to get stats"})
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to get stats %v", err.Error())})
 		return
 	}
 	defer rows.Close()
