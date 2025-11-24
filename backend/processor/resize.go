@@ -1,33 +1,35 @@
 package processor
 
 import (
-	"database/sql"
+	"bytes"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 
 	"github.com/disintegration/imaging"
 )
 
-const storageBasePath = "/home/polarbeer/Documents/Image-Processor/backend/storage/processed"
+const storageBasePath = "/home/polarbeer/Documents/Image-Processor/storage/processed"
 
-func Resize(db *sql.DB, imageID string, params map[string]interface{}) (string, error) {
-	// Get original image path
-	var originalPath string
-	err := db.QueryRow("SELECT original_path FROM images WHERE id = $1", imageID).Scan(&originalPath)
+func Resize(imageData []byte, imageID string, params map[string]interface{}) (string, error) {
+
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return "", fmt.Errorf("image not found: %v", err)
+		return "", fmt.Errorf("failed to decode image from bytes: %v", err)
 	}
 
-	// Open image
-	img, err := imaging.Open(originalPath)
+	// height and width ???
+	width, height, err := getResizeDimensions(params)
 	if err != nil {
-		return "", fmt.Errorf("failed to open image: %v", err)
+		return "", err
 	}
 
-	// Get resize parameters
-	// width := int(params["width"].(float64))
-	// height := int(params["height"].(float64))
+	// Resize and save
+	return resizeAndSave(img, imageID, width, height)
+}
+
+func getResizeDimensions(params map[string]interface{}) (int, int, error) {
 	var width, height int
 
 	switch v := params["width"].(type) {
@@ -36,7 +38,7 @@ func Resize(db *sql.DB, imageID string, params map[string]interface{}) (string, 
 	case int:
 		width = v
 	default:
-		return "", fmt.Errorf("invalid width type %T", v)
+		return 0, 0, fmt.Errorf("invalid width type %T", v)
 	}
 
 	switch v := params["height"].(type) {
@@ -45,17 +47,21 @@ func Resize(db *sql.DB, imageID string, params map[string]interface{}) (string, 
 	case int:
 		height = v
 	default:
-		return "", fmt.Errorf("invalid height type %T", v)
+		return 0, 0, fmt.Errorf("invalid height type %T", v)
 	}
 
-	// Resize image (CPU-intensive operation)
+	return width, height, nil
+}
+
+func resizeAndSave(img image.Image, imageID string, width, height int) (string, error) {
+
 	resized := imaging.Resize(img, width, height, imaging.Lanczos)
 
 	// Save processed image
 	outputPath := filepath.Join(storageBasePath, fmt.Sprintf("%s_resized_%dx%d.jpg", imageID, width, height))
 	os.MkdirAll(filepath.Dir(outputPath), 0755)
 
-	err = imaging.Save(resized, outputPath)
+	err := imaging.Save(resized, outputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to save image: %v", err)
 	}

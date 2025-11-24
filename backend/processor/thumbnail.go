@@ -1,28 +1,23 @@
 package processor
 
 import (
-	"database/sql"
+	"bytes"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 
 	"github.com/disintegration/imaging"
 )
 
-func Thumbnail(db *sql.DB, imageID string, params map[string]interface{}) (string, error) {
-	var originalPath string
-	err := db.QueryRow("SELECT original_path FROM images WHERE id = $1", imageID).Scan(&originalPath)
+func Thumbnail(imageData []byte, imageID string, params map[string]interface{}) (string, error) {
+
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return "", fmt.Errorf("image not found: %v", err)
+		return "", fmt.Errorf("failed to decode image from bytes: %v", err)
 	}
 
-	img, err := imaging.Open(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open image: %v", err)
-	}
-
-	// size := int(params["size"].(float64))
-
+	// size ???
 	var size int
 	switch v := params["size"].(type) {
 	case float64:
@@ -30,10 +25,9 @@ func Thumbnail(db *sql.DB, imageID string, params map[string]interface{}) (strin
 	case int:
 		size = v
 	default:
-		return "", fmt.Errorf("invalid quality type: %T", v)
+		return "", fmt.Errorf("invalid size type: %T", v)
 	}
 
-	// Create thumbnail (CPU-intensive)
 	thumb := imaging.Thumbnail(img, size, size, imaging.Lanczos)
 
 	outputPath := filepath.Join(storageBasePath, fmt.Sprintf("%s_thumb_%d.jpg", imageID, size))

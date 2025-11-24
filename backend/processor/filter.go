@@ -1,24 +1,20 @@
 package processor
 
 import (
-	"database/sql"
+	"bytes"
 	"fmt"
-	"github.com/disintegration/imaging"
 	"image"
 	"os"
 	"path/filepath"
+
+	"github.com/disintegration/imaging"
 )
 
-func ApplyFilter(db *sql.DB, imageID string, params map[string]interface{}) (string, error) {
-	var originalPath string
-	err := db.QueryRow("SELECT original_path FROM images WHERE id = $1", imageID).Scan(&originalPath)
-	if err != nil {
-		return "", fmt.Errorf("image not found: %v", err)
-	}
+func Filter(imageData []byte, imageID string, params map[string]interface{}) (string, error) {
 
-	img, err := imaging.Open(originalPath)
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return "", fmt.Errorf("failed to open image: %v", err)
+		return "", fmt.Errorf("failed to decode image from bytes: %v", err)
 	}
 
 	filterType := params["filter_type"].(string)
@@ -26,7 +22,7 @@ func ApplyFilter(db *sql.DB, imageID string, params map[string]interface{}) (str
 
 	var filtered image.Image
 
-	// CPU-intensive operations
+	// applying filters
 	switch filterType {
 	case "blur":
 		filtered = imaging.Blur(img, intensity)

@@ -22,38 +22,57 @@ import (
 var (
 	db              *sql.DB
 	backendURL      = "http://localhost:8081"
-	storageBasePath = "/home/polarbeer/Documents/Image-Processor/frontend/storage/uploads"
+	storageBasePath = "/home/polarbeer/Documents/Image-Processor/storage/uploads"
 )
 
 func main() {
-	// Connect to database
+	//setting tmp directory to remove caching in ram [some optimizations to get diskio]
+	os.Setenv("TMPDIR", "/var/tmp")
+
+	// connect to database
 	var err error
 	db, err = sql.Open("postgres",
 		"host=localhost port=5432 user=imageuser password=imagepass dbname=imagedb sslmode=disable")
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
+
+	// Configure connection pool for concurrent load
+	db.SetMaxOpenConns(999) // Maximum concurrent connections
+	db.SetMaxIdleConns(50)  // Keep 50 idle connections ready
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(2 * time.Minute)
+
+	// Verify connection
+	err = db.Ping()
+	if err != nil {
+		log.Fatal("Failed to ping database:", err)
+	}
+
 	defer db.Close()
 
-	// Create storage directory
+	// create storage directory
 	os.MkdirAll(storageBasePath, 0755)
 
-	// Setup router
+	// setup router
 	r := gin.Default()
 
-	// Health check
+	// maximum multipart ram
+	r.MaxMultipartMemory = 8 << 20
+
+	// health check just in case!
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// Upload/Download endpoints (I/O-bound)
+	// Upload/Download endpoints
 	r.POST("/upload", handleUpload)
 	r.GET("/image/:id", handleDownload)
 	r.GET("/image/:id/processed/:processed_id", handleDownloadProcessed)
 	r.GET("/images", handleListImages)
 	r.DELETE("/image/:id", handleDelete)
 
-	// Processing endpoints (forward to backend - CPU-bound)
+	// Processing endpoints
 	r.POST("/process/resize", forwardToBackend)
 	r.POST("/process/thumbnail", forwardToBackend)
 	r.POST("/process/filter", forwardToBackend)
@@ -68,9 +87,11 @@ func main() {
 }
 
 func handleUpload(c *gin.Context) {
+	// do not put into ram
+	c.Request.MultipartForm = nil
 	startTime := time.Now()
 
-	// Parse multipart form (I/O-bound)
+	// Parse multipart form
 	file, header, err := c.Request.FormFile("image")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "No file uploaded"})
@@ -82,7 +103,7 @@ func handleUpload(c *gin.Context) {
 	imageID := uuid.New().String()
 	uploadedBy := c.DefaultPostForm("client_id", "anonymous")
 
-	// Save file to disk (I/O-bound)
+	// Save file to disk
 	ext := filepath.Ext(header.Filename)
 	filename := imageID + ext
 	filepath := filepath.Join(storageBasePath, filename)
@@ -100,16 +121,17 @@ func handleUpload(c *gin.Context) {
 		return
 	}
 
-	// Get image dimensions
-	// For simplicity, skip this for now
+	//force to save file on disk
+	out.Sync()
 
-	// Save metadata to database (I/O-bound)
+	// save metadata to database (I/O-bound)
 	_, err = db.Exec(`
         INSERT INTO images (id, filename, original_path, content_type, size_bytes, uploaded_by, status)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
     `, imageID, header.Filename, filepath, header.Header.Get("Content-Type"), size, uploadedBy, "uploaded")
 
 	if err != nil {
+		log.Printf("Database error: %v", err)
 		c.JSON(500, gin.H{"error": "Failed to save metadata"})
 		return
 	}
@@ -128,7 +150,6 @@ func handleUpload(c *gin.Context) {
 func handleDownload(c *gin.Context) {
 	imageID := c.Param("id")
 
-	// Get image path from database (I/O-bound)
 	var filename, filepath, contentType string
 	err := db.QueryRow("SELECT original_path, content_type, filename FROM images WHERE id = $1", imageID).
 		Scan(&filepath, &contentType, &filename)
@@ -138,7 +159,6 @@ func handleDownload(c *gin.Context) {
 		return
 	}
 
-	// Serve file (I/O-bound)
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	// fmt.Println(filename)
@@ -167,7 +187,7 @@ func handleDownloadProcessed(c *gin.Context) {
 }
 
 func handleListImages(c *gin.Context) {
-	// Query all images (I/O-bound)
+
 	rows, err := db.Query(`
         SELECT id, filename, size_bytes, uploaded_by, uploaded_at, status
         FROM images
@@ -206,7 +226,6 @@ func handleListImages(c *gin.Context) {
 func handleDelete(c *gin.Context) {
 	imageID := c.Param("id")
 
-	// Get file path
 	var filepath string
 	err := db.QueryRow("SELECT original_path FROM images WHERE id = $1", imageID).Scan(&filepath)
 	if err != nil {
@@ -214,7 +233,6 @@ func handleDelete(c *gin.Context) {
 		return
 	}
 
-	// Get all processed file paths before cascading delete
 	rows, err := db.Query("SELECT processed_path FROM processed_images WHERE original_image_id = $1", imageID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to fetch processed image paths"})
@@ -230,35 +248,35 @@ func handleDelete(c *gin.Context) {
 		}
 	}
 
-	// Delete from database (cascades to processed_images)
+	// delete from database (cascades to processed_images)
 	_, err = db.Exec("DELETE FROM images WHERE id = $1", imageID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to delete from database"})
 		return
 	}
 
-	// Delete all processed files
+	// delete all processed files
 	for _, p := range processedPaths {
 		if err := os.Remove(p); err != nil {
 			log.Printf("Warning: failed to delete processed file %s: %v", p, err)
 		}
 	}
 
-	// Delete file from disk
+	// delete file from disk
 	os.Remove(filepath)
 
 	c.JSON(200, gin.H{"message": "Image deleted successfully"})
 }
 
 func forwardToBackend(c *gin.Context) {
-	// Read request body
+	// read request body
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to read request"})
 		return
 	}
 
-	// Forward to backend
+	// forwarding to backend
 	url := backendURL + c.Request.URL.Path
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
@@ -276,21 +294,21 @@ func forwardToBackend(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	// Read response
+	// read response
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to read response"})
 		return
 	}
 
-	// Forward response
+	// forward response
 	var result map[string]interface{}
 	json.Unmarshal(respBody, &result)
 	c.JSON(resp.StatusCode, result)
 }
 
 func handleStats(c *gin.Context) {
-	// Get statistics (I/O-bound database queries)
+	// Get statistics
 	var totalImages, totalProcessed int
 	var totalSize int64
 

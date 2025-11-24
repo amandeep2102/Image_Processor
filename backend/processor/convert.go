@@ -1,8 +1,9 @@
 package processor
 
 import (
-	"database/sql"
+	"bytes"
 	"fmt"
+	"image"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -10,21 +11,16 @@ import (
 	"github.com/disintegration/imaging"
 )
 
-func Convert(db *sql.DB, imageID string, params map[string]interface{}) (string, error) {
-	var originalPath string
-	err := db.QueryRow("SELECT original_path FROM images WHERE id = $1", imageID).Scan(&originalPath)
-	if err != nil {
-		return "", fmt.Errorf("image not found: %v", err)
-	}
+func Convert(imageData []byte, imageID string, params map[string]interface{}) (string, error) {
 
-	img, err := imaging.Open(originalPath)
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return "", fmt.Errorf("failed to open image: %v", err)
+		return "", fmt.Errorf("failed to decode image from bytes: %v", err)
 	}
 
 	format := params["format"].(string)
-	// quality := int(params["quality"].(float64))
 
+	// quality??
 	var quality int
 	switch v := params["quality"].(type) {
 	case float64:
@@ -38,12 +34,17 @@ func Convert(db *sql.DB, imageID string, params map[string]interface{}) (string,
 	outputPath := filepath.Join(storageBasePath, fmt.Sprintf("%s_converted.%s", imageID, format))
 	os.MkdirAll(filepath.Dir(outputPath), 0755)
 
-	// Save with specified format and quality (CPU-intensive)
+	// Saving
 	var saveErr error
 	switch format {
 	case "jpeg", "jpg":
 		saveErr = imaging.Save(img, outputPath, imaging.JPEGQuality(quality))
 	case "png":
+		// defining levels for png
+		// 0 - default
+		// -1 - noCompression
+		// -2 - bestSpeed
+		// -3 - bestCompression
 
 		var level int
 		if quality < 20 {
@@ -56,7 +57,6 @@ func Convert(db *sql.DB, imageID string, params map[string]interface{}) (string,
 			level = -1
 		}
 		saveErr = imaging.Save(img, outputPath, imaging.PNGCompressionLevel(png.CompressionLevel(level)))
-
 	default:
 		saveErr = imaging.Save(img, outputPath)
 	}
